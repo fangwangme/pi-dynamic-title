@@ -1,0 +1,39 @@
+# Worktrees — local development worktrees, not part of the repo
+.worktrees/
+
+# Worktree-local state — each worktree's own data, build output, and temp files
+.local/
+
+# Sisyphus — task orchestration artifacts
+.sisyphus/
+
+# Node.js — dependencies and build outputs
+node_modules/
+.pnpm-store/
+.npm/
+
+# TypeScript build output
+dist/
+out/
+build/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Coverage reports
+coverage/
+.nyc_output/
+
+# Environment files (contain secrets)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
