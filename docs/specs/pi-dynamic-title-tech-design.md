@@ -1,6 +1,12 @@
 # Pi Dynamic Title Extension — 技术设计文档
 
-> **目标**: 开发一个 Pi Coding Agent Extension，自动更新终端窗口标题（Terminal Title），实现四段式组合 title，方便多 Agent、多模型场景下快速定位。
+> **设计简化与更新说明 (2026-05-27)**:
+> - **移除大模型自动生成**: 彻底移除了 `title-generator.ts` 和大模型相关的 `generateTitle` 逻辑，消除 API Key 依赖和调用延时。标题直接读取 Pi 官方的 `pi.getSessionName()`。
+> - **新增 \`worktree\` 配置段**: 扩展目前支持 5 个配置段：`status`、`agent`、`worktree`（Git 工作区目录名）、`model`、`title`（Session 名称）。
+> - **智能 Fallback 防重机制**:
+>   - 当未开启 `worktree` 段时，`title` 会自动 Fallback 为 Git 根目录/工作区根目录文件夹名，确保基础项目定位。
+>   - 当开启 `worktree` 段时，若 session 命名为空，则 `title` 段将自动保持空白，以防字符重复冗余。
+> - **新增交互式重命名**: 废弃原 `/dynamic-title regenerate` 和 `model` 子命令，替换为 `/dynamic-title rename` 交互式重命名命令，直观调用 `pi.setSessionName` 更改会话名并同步终端标题。
 
 ---
 
