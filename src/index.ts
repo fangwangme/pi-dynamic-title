@@ -75,25 +75,22 @@ export default function (pi: ExtensionAPI) {
 
   function startAnimation(ctx: ExtensionContext) {
     if (!hasPrompts) return;
+    if (!config.segments.includes("status")) return; // Only animate if status segment is enabled
     stopAnimation();
-
-    const nonStatusSegments = config.segments.filter((s) => s !== "status");
 
     animationTimer = setInterval(() => {
       const frame = config.spinnerFrames[frameIndex % config.spinnerFrames.length];
-      const restTitle = formatTitle(
+      const title = formatTitle(
         {
-          // We pass status: "idle" here because the spinner frame is manually prepended to the rest of the title.
-          // The "status" segment is excluded from nonStatusSegments to prevent the separator from being drawn between it and the rest of the segments.
-          status: "idle",
+          status: "running",
           agentName: config.agentName,
           modelName,
           worktreeName,
           sessionTitle: resolveSessionTitle(ctx),
+          animationFrame: frame,
         },
-        { ...config, segments: nonStatusSegments as any }
+        config
       );
-      const title = restTitle ? `${frame} ${restTitle}` : frame;
 
       if (ctx.hasUI) {
         isUpdatingSelf = true;
@@ -418,7 +415,7 @@ export default function (pi: ExtensionAPI) {
     status = "finished";
     updateTitle(ctx);
 
-    if (wasLongRunning && config.notifications && config.notifyOnComplete) {
+    if (wasLongRunning && config.notifications && config.notifyOnComplete && !isFocused) {
       sendTerminalNotification("Task completed", ctx);
     }
     scheduleFinishedFade(ctx);

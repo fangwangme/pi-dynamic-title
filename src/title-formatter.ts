@@ -49,7 +49,7 @@ function getStatusContent(status: AgentStatus, frame?: string): string {
 
 /** Formats terminal window title based on config and current state */
 export function formatTitle(state: TitleState, config: DynamicTitleConfig): string {
-  const parts: string[] = [];
+  const parts: { segment: string; content: string }[] = [];
   const maxLen = config.maxTitleLength ?? 50;
 
   for (const segment of config.segments) {
@@ -74,7 +74,7 @@ export function formatTitle(state: TitleState, config: DynamicTitleConfig): stri
     }
 
     if (content) {
-      parts.push(sanitizeTitle(content, maxLen));
+      parts.push({ segment, content: sanitizeTitle(content, maxLen) });
     }
   }
 
@@ -82,9 +82,26 @@ export function formatTitle(state: TitleState, config: DynamicTitleConfig): stri
     ? ` ${config.separatorChar} `
     : config.separatorChar;
 
+  let result = "";
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (i === 0) {
+      result = part.content;
+    } else {
+      const prevPart = parts[i - 1];
+      // When the status segment is a running spinner, separate it from adjacent segments with a space instead of the configured separator
+      const isStatusSpinnerRunning =
+        (prevPart.segment === "status" && state.status === "running") ||
+        (part.segment === "status" && state.status === "running");
+
+      const currentSep = isStatusSpinnerRunning ? " " : sep;
+      result += currentSep + part.content;
+    }
+  }
+
   // Fallback to title or agent name if all segments are empty
   return parts.length > 0
-    ? parts.join(sep)
+    ? result
     : sanitizeTitle(state.sessionTitle || state.worktreeName, maxLen) || "π";
 }
 
