@@ -50,7 +50,7 @@ function getStatusContent(status: AgentStatus, frame?: string): string {
 /** Formats terminal window title based on config and current state */
 export function formatTitle(state: TitleState, config: DynamicTitleConfig): string {
   const parts: string[] = [];
-  const hasWorktreeSegment = config.segments.includes("worktree");
+  const maxLen = config.maxTitleLength ?? 50;
 
   for (const segment of config.segments) {
     let content = "";
@@ -74,7 +74,7 @@ export function formatTitle(state: TitleState, config: DynamicTitleConfig): stri
     }
 
     if (content) {
-      parts.push(sanitizeTitle(content));
+      parts.push(sanitizeTitle(content, maxLen));
     }
   }
 
@@ -85,7 +85,7 @@ export function formatTitle(state: TitleState, config: DynamicTitleConfig): stri
   // Fallback to title or agent name if all segments are empty
   return parts.length > 0
     ? parts.join(sep)
-    : sanitizeTitle(state.sessionTitle || state.worktreeName) || "π";
+    : sanitizeTitle(state.sessionTitle || state.worktreeName, maxLen) || "π";
 }
 
 /** Extract short model name from full provider/model id string and apply shortening rules */
@@ -104,20 +104,8 @@ export function shortModelName(fullModelId: string): string {
   name = name.replace(/-?preview$/gi, "");
   name = name.replace(/-?preview-?/gi, "-");
 
+  // Collapse consecutive hyphens and trim
+  name = name.replace(/--+/g, "-").replace(/^-+|-+$/g, "");
+
   return name.trim();
 }
-
-/**
- * Extract clean session name from an intercepted terminal title.
- * Strips common status icons and pi/π prefixes.
- */
-export function cleanInterceptedTitle(title: string): string {
-  if (!title) return "";
-  let clean = title.trim();
-  // Strip common status prefixes like "●", "✗", "!", spinner frames
-  clean = clean.replace(/^[●✗\!⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*/g, "");
-  // Strip "π", "pi", "π -", "pi -", "π |", "pi |" at the beginning (case-insensitive)
-  clean = clean.replace(/^(π|pi)\s*([\-\|·•−—–]\s*)?/i, "");
-  return clean.trim();
-}
-

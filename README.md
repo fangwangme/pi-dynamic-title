@@ -10,29 +10,28 @@ Pi Coding Agent Extension that dynamically updates your terminal window/tab titl
   - `worktree`: Git worktree / repository top-level directory name (defaults to CWD basename if outside Git).
   - `model`: Explicitly mapped short model name (e.g., `sonnet-4`, `DS-chat`, `gemini-2.0-flash`).
   - `title`: Direct display of the Pi Session Name.
-- **No LLM Dependencies**: Completely simplified title rendering. Directly displays the session name (with worktree name fallback if empty). Zero API network calls, zero API-key dependencies, and zero latency.
-- **Dynamic Model Name Mapping**: Trims model names to save valuable terminal title space:
-  - Strip provider path prefix (e.g., `anthropic/claude-sonnet-4` -> `claude-sonnet-4`).
-  - Map `deepseek` to `DS` (case-insensitive, e.g., `deepseek-chat` -> `DS-chat`).
-  - Remove `claude` and its surrounding hyphens (e.g., `claude-sonnet-4` -> `sonnet-4`).
-  - Remove `preview` and its surrounding hyphens (e.g., `gemini-2.0-flash-exp-preview` -> `gemini-2.0-flash-exp`).
-  - Retain specific hyphens representing version numbers (e.g. `gemini-1-5-pro` is not normalized).
-- **Default Separator & Padding**: Employs a padded mid dot ` · ` (configurable separator character with optional padding spaces around it) to cleanly join enabled segments.
-- **Smart Fallback & Duplication Guard**:
-  - If the `worktree` segment is **not** active, the `title` segment automatically falls back to the Git worktree/repository name when no explicit session name is set.
-  - If both `worktree` and `title` segments are active, duplication is automatically guarded: the `title` segment remains empty until you explicitly rename the session.
-- **Focus Detection (DECSET 1004)**: Instantly clears the task completion dot `●` when you refocus the terminal window. If already focused, it falls back to a 5-second automatic timeout.
-- **Terminal & System Notifications**: Dual-track notification support: sends terminal OSC 9 commands and falls back to system notifications for long-running tasks.
-- **Interactive Commands**: Exposes `/dynamic-title` command with subcommands:
-  - `/dynamic-title segments`: Select segment presets or enter custom layouts.
-  - `/dynamic-title rename`: Interactively rename the current Pi session name, instantly updating the title.
+- **Animation Separated by Space**: The running spinner is joined to the rest of the title with a plain space, independent of your configured segment separator.
+- **Global-Only Configuration**: Settings are saved to `~/.pi/agent/settings.json` and apply to all new sessions. No per-session overrides.
+- **No LLM Dependencies**: Displays the session name directly. Zero API network calls and zero API-key dependencies.
+- **Dynamic Model Name Mapping**: Trims model names to save terminal title space:
+  - Strip provider path prefix (e.g., `anthropic/claude-sonnet-4` → `claude-sonnet-4`).
+  - Map `deepseek` to `DS` (case-insensitive).
+  - Remove `claude` and its adjacent hyphens (e.g., `claude-sonnet-4` → `sonnet-4`).
+  - Remove `preview` and its adjacent hyphens (e.g., `gemini-2.0-flash-exp-preview` → `gemini-2.0-flash-exp`).
+  - Retain version-number hyphens (e.g. `gemini-1-5-pro` stays as-is).
+- **Customizable Separator & Padding**: Choose any separator character (default mid dot `·`) with optional padding spaces around it.
+- **Focus Detection (DECSET 1004)**: Instantly clears the task completion dot `●` when you refocus the terminal window. Falls back to `successDurationMs` when the terminal does not report focus events.
+- **Terminal & System Notifications**: Sends OSC 9 terminal notifications and falls back to macOS system notifications for long-running tasks.
+- **Interactive Commands**: Exposes `/dynamic-title` with subcommands for switching segments, separator, and renaming the session.
 
 ---
 
 ## Default Configuration
 
 By default, the title segments are set to:
-`["status", "agent", "model", "title"]`
+```json
+["status", "agent", "model", "title"]
+```
 
 The `worktree` segment is available as a configurable option but is disabled by default.
 
@@ -54,7 +53,7 @@ cp -r ./dist ./.pi/extensions/pi-dynamic-title
 
 ## Configuration
 
-You can customize the extension parameters inside your global `~/.pi/agent/settings.json` or local `.pi/settings.json` under the `dynamicTitle` key:
+Settings are stored in your global `~/.pi/agent/settings.json` under the `dynamicTitle` key:
 
 ```json
 {
@@ -63,18 +62,31 @@ You can customize the extension parameters inside your global `~/.pi/agent/setti
     "agentName": "π",
     "animationInterval": 80,
     "successDurationMs": 5000,
+    "spinnerFrames": ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+    "separatorChar": "·",
+    "separatorPadding": true,
+    "maxTitleLength": 50,
     "notifications": true,
     "notifyOnComplete": true,
-    "notifyMinDurationMs": 5000,
-    "separatorChar": "·",
-    "separatorPadding": true
+    "notifyMinDurationMs": 5000
   }
 }
 ```
 
 ### Environment Overrides
-- `PI_DYNAMIC_TITLE_SEGMENTS`: Override active segments (space-separated, e.g. `status worktree title`).
+- `PI_DYNAMIC_TITLE_SEGMENTS`: Override active segments with a space-separated list (e.g. `status worktree title`).
 - `PI_DYNAMIC_TITLE_AGENT_NAME`: Override default agent display name.
+
+---
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/dynamic-title` | Opens the main menu: Segments, Separator, Rename, Show Config. |
+| `/dynamic-title segments` | Switch between presets or define a custom segment order. |
+| `/dynamic-title separator` | Choose separator character and toggle padding. |
+| `/dynamic-title rename` | Interactively rename the current Pi session. |
 
 ---
 

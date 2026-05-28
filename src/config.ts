@@ -25,11 +25,13 @@ export interface DynamicTitleConfig {
   separatorChar: string;
   /** Add padding spaces around separator. Default: true */
   separatorPadding: boolean;
+  /** Maximum characters per segment before truncating with "…". Default: 50 */
+  maxTitleLength: number;
 }
 
 const DEFAULT_SEGMENTS: TitleSegment[] = ["status", "agent", "model", "title"];
 
-export const DEFAULT_CONFIG: DynamicTitleConfig = {
+export const DEFAULT_CONFIG: DynamicTitleConfig = Object.freeze({
   segments: [...DEFAULT_SEGMENTS],
   agentName: "π",
   animationInterval: 80,
@@ -40,20 +42,27 @@ export const DEFAULT_CONFIG: DynamicTitleConfig = {
   notifyMinDurationMs: 5000,
   separatorChar: "·",
   separatorPadding: true,
-};
+  maxTitleLength: 50,
+});
 
 const VALID_SEGMENTS = new Set<string>(["status", "agent", "worktree", "model", "title"]);
 
-/** Parse segment options string (e.g. "status agent model title") */
-export function parseSegments(input: string): TitleSegment[] {
-  const parts = input.trim().split(/\s+/);
+/** Parse segment options string (e.g. "status | agent | model | title") */
+export function parseSegments(input: string): TitleSegment[] | null {
+  const separator = input.includes("|") ? "|" : /\s+/;
+  const parts = input.trim().split(separator);
   const segments: TitleSegment[] = [];
-  for (const p of parts) {
-    if (VALID_SEGMENTS.has(p)) {
-      segments.push(p as TitleSegment);
+  
+  for (const part of parts) {
+    const trimmed = part.trim().toLowerCase();
+    if (!trimmed) continue;
+    if (VALID_SEGMENTS.has(trimmed)) {
+      segments.push(trimmed as TitleSegment);
+    } else {
+      return null; // Invalid segment detected
     }
   }
-  return segments;
+  return segments.length > 0 ? segments : null;
 }
 
 /** Recursively read settings from a settings object (from settings.json) */
@@ -69,7 +78,7 @@ function mergeSettingsJson(config: DynamicTitleConfig, settingsObj: any) {
   if (typeof dt.agentName === "string" && dt.agentName.trim()) config.agentName = dt.agentName.trim();
   if (typeof dt.animationInterval === "number" && dt.animationInterval > 0) config.animationInterval = dt.animationInterval;
   if (typeof dt.successDurationMs === "number" && dt.successDurationMs >= 0) config.successDurationMs = dt.successDurationMs;
-  if (Array.isArray(dt.spinnerFrames) && dt.spinnerFrames.every((f: any) => typeof f === "string")) {
+  if (Array.isArray(dt.spinnerFrames) && dt.spinnerFrames.length > 0 && dt.spinnerFrames.every((f: any) => typeof f === "string")) {
     config.spinnerFrames = dt.spinnerFrames;
   }
   if (typeof dt.notifications === "boolean") config.notifications = dt.notifications;
@@ -79,6 +88,7 @@ function mergeSettingsJson(config: DynamicTitleConfig, settingsObj: any) {
   }
   if (typeof dt.separatorChar === "string") config.separatorChar = dt.separatorChar;
   if (typeof dt.separatorPadding === "boolean") config.separatorPadding = dt.separatorPadding;
+  if (typeof dt.maxTitleLength === "number" && dt.maxTitleLength > 0) config.maxTitleLength = dt.maxTitleLength;
 }
 
 /** Load config by merging defaults, settings.json, and env variables */
@@ -111,7 +121,7 @@ export function loadConfig(cwd: string = process.cwd()): DynamicTitleConfig {
   // 3. Environment variable overrides
   if (process.env.PI_DYNAMIC_TITLE_SEGMENTS) {
     const parsed = parseSegments(process.env.PI_DYNAMIC_TITLE_SEGMENTS);
-    if (parsed.length > 0) config.segments = parsed;
+    if (parsed && parsed.length > 0) config.segments = parsed;
   }
   if (process.env.PI_DYNAMIC_TITLE_AGENT_NAME) {
     config.agentName = process.env.PI_DYNAMIC_TITLE_AGENT_NAME;
@@ -121,13 +131,18 @@ export function loadConfig(cwd: string = process.cwd()): DynamicTitleConfig {
 }
 
 /** Modify segments configuration dynamically, returning whether it succeeded */
-export function setSegments(config: DynamicTitleConfig, input: string): boolean {
+export function setSegments(config: DynamicTitleConfig, input: string): { ok: boolean; error?: string } {
   if (input === "reset") {
     config.segments = [...DEFAULT_SEGMENTS];
-    return true;
+    return { ok: true };
   }
   const parsed = parseSegments(input);
-  if (parsed.length === 0) return false; // At least one segment required
+  if (!parsed) {
+    return {
+      ok: false,
+      error: "Invalid segments. Supported options: status, agent, worktree, model, title",
+    };
+  }
   config.segments = parsed;
-  return true;
+  return { ok: true };
 }

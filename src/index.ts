@@ -1,11 +1,12 @@
 import path from "node:path";
-import { exec } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import { exec, execFile } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig, setSegments, type DynamicTitleConfig } from "./config.js";
 import {
   formatTitle,
   shortModelName,
-  cleanInterceptedTitle,
   type AgentStatus,
   type TitleState,
 } from "./title-formatter.js";
@@ -19,8 +20,10 @@ export default function (pi: ExtensionAPI) {
   let modelName = "";           // Short model name (e.g. "claude-sonnet-4")
   let worktreeName = "";        // Git worktree name or cwd basename fallback
   let isUpdatingSelf = false;   // Guard flag to prevent infinite loops in setTitle wrapping
-  let interceptedTitle = "";    // Captured from external ui.setTitle calls
   let hasPrompts = false;       // Track if we have prompts in history or agent run started
+  let cachedFirstPrompt = "";   // Cached first user message to avoid repeated array traversal in animation loop
+  let currentCtx: ExtensionContext | null = null;
+  let lastSessionName = "";
   
   let finishedTimer: ReturnType<typeof setTimeout> | null = null;
   let notifTimer: ReturnType<typeof setTimeout> | null = null;
@@ -29,7 +32,6 @@ export default function (pi: ExtensionAPI) {
   // Focus-tracking state
   let supportsFocusEvents = false; // Set to true dynamically when focus events are received
   let isFocused = true;           // Assume focused initially
-  let receivedFocusEvent = false; // Tracks if we have received a focus event
 
   // ===== Animation control =====
   let animationTimer: ReturnType<typeof setInterval> | null = null;
@@ -46,23 +48,53 @@ export default function (pi: ExtensionAPI) {
     frameIndex = 0;
   }
 
+  function getFirstUserPrompt(ctx: ExtensionContext): string {
+    try {
+      const entries = ctx.sessionManager.getBranch();
+      const firstUserMsg = entries.find(
+        (e: any) => e.type === "message" && e.message && e.message.role === "user"
+      ) as any;
+      if (!firstUserMsg || !firstUserMsg.message) return "";
+      const content = firstUserMsg.message.content;
+      if (typeof content === "string") return content;
+      if (Array.isArray(content)) {
+        return content
+          .filter((c) => c && typeof c === "object" && c.type === "text" && typeof c.text === "string")
+          .map((c) => c.text)
+          .join("");
+      }
+    } catch (err) {
+      console.error("[pi-dynamic-title] failed to get first user prompt:", err);
+    }
+    return "";
+  }
+
+  function resolveSessionTitle(ctx: ExtensionContext): string {
+    return pi.getSessionName() || cachedFirstPrompt || worktreeName;
+  }
+
   function startAnimation(ctx: ExtensionContext) {
-    ensureUiWrapped(ctx);
     if (!hasPrompts) return;
     stopAnimation();
+
+    const nonStatusSegments = config.segments.filter((s) => s !== "status");
+
     animationTimer = setInterval(() => {
       const frame = config.spinnerFrames[frameIndex % config.spinnerFrames.length];
-      const title = formatTitle(
+      const restTitle = formatTitle(
         {
-          status: "running",
+          // We pass status: "idle" here because the spinner frame is manually prepended to the rest of the title.
+          // The "status" segment is excluded from nonStatusSegments to prevent the separator from being drawn between it and the rest of the segments.
+          status: "idle",
           agentName: config.agentName,
           modelName,
           worktreeName,
-          sessionTitle: pi.getSessionName() || interceptedTitle || getFirstUserPrompt(ctx) || "",
-          animationFrame: frame,
+          sessionTitle: resolveSessionTitle(ctx),
         },
-        config
+        { ...config, segments: nonStatusSegments as any }
       );
+      const title = restTitle ? `${frame} ${restTitle}` : frame;
+
       if (ctx.hasUI) {
         isUpdatingSelf = true;
         try {
@@ -76,8 +108,10 @@ export default function (pi: ExtensionAPI) {
   }
 
   function updateTitle(ctx: ExtensionContext) {
-    ensureUiWrapped(ctx);
     if (!hasPrompts) return;
+    // Update the cache of the first user prompt to avoid branch traversal inside the 80ms animation timer
+    cachedFirstPrompt = getFirstUserPrompt(ctx);
+
     // If agent is currently running, the animation interval handles title updates.
     if (status === "running" && animationTimer) return;
 
@@ -87,7 +121,7 @@ export default function (pi: ExtensionAPI) {
         agentName: config.agentName,
         modelName,
         worktreeName,
-        sessionTitle: pi.getSessionName() || interceptedTitle || getFirstUserPrompt(ctx) || "",
+        sessionTitle: resolveSessionTitle(ctx),
       },
       config
     );
@@ -113,7 +147,7 @@ export default function (pi: ExtensionAPI) {
           updateTitle(ctx);
         }
         finishedTimer = null;
-      }, 5000);
+      }, config.successDurationMs);
       return;
     }
 
@@ -126,9 +160,6 @@ export default function (pi: ExtensionAPI) {
         }
         finishedTimer = null;
       }, 2000);
-    } else {
-      // If the user is currently focused elsewhere (out of focus), wait forever.
-      // The status will be cleared immediately when they focus back in (Focus In event).
     }
   }
 
@@ -136,57 +167,6 @@ export default function (pi: ExtensionAPI) {
     if (finishedTimer) {
       clearTimeout(finishedTimer);
       finishedTimer = null;
-    }
-  }
-
-  // ===== Helpers =====
-  function refreshModelName(ctx: ExtensionContext) {
-    const model = ctx.model;
-    modelName = model ? shortModelName(model.id) : "";
-  }
-
-  function getFirstUserPrompt(ctx: ExtensionContext): string {
-    const entries = ctx.sessionManager.getBranch();
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i];
-      if (entry.type === "message" && entry.message.role === "user") {
-        const content = entry.message.content;
-        if (typeof content === "string") return content;
-        if (Array.isArray(content)) {
-          const textPart = (content as any[]).find(
-            (p: any) => p.type === "text" && !p.synthetic
-          );
-          if (textPart && "text" in textPart) return textPart.text;
-        }
-      }
-    }
-    return "";
-  }
-
-  function saveConfigToSession(ctx: ExtensionContext) {
-    pi.appendEntry("dynamic-title-config", {
-      segments: config.segments,
-      agentName: config.agentName,
-      separatorChar: config.separatorChar,
-      separatorPadding: config.separatorPadding,
-    });
-  }
-
-  function sendTerminalNotification(message: string, ctx: ExtensionContext) {
-    if (notifTimer) {
-      clearTimeout(notifTimer);
-      notifTimer = null;
-    }
-
-    // 1. Send OSC 9 (native terminal notification)
-    process.stdout.write(`\x1b]9;π ${message}\x07`);
-
-    // 2. Fallback OS Notification (osascript on macOS) after 10 seconds if user hasn't focused
-    if (process.platform === "darwin") {
-      notifTimer = setTimeout(() => {
-        notifTimer = null;
-        exec(`osascript -e 'display notification "${message}" with title "π"'`);
-      }, 10000);
     }
   }
 
@@ -208,7 +188,6 @@ export default function (pi: ExtensionAPI) {
             }
             return;
           }
-          interceptedTitle = cleanInterceptedTitle(newTitle);
           if (hasPrompts) {
             updateTitle(ctx);
           } else {
@@ -239,42 +218,97 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // ===== Helpers =====
+  function refreshModelName(ctx: ExtensionContext) {
+    const model = ctx.model;
+    modelName = model ? shortModelName(model.id) : "";
+  }
+
+  function saveConfigToGlobalSettings() {
+    const settingsDir = path.join(os.homedir(), ".pi", "agent");
+    const settingsPath = path.join(settingsDir, "settings.json");
+    try {
+      let settings: any = {};
+      if (fs.existsSync(settingsPath)) {
+        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+      }
+      if (!settings || typeof settings !== "object") {
+        settings = {};
+      }
+
+      settings.dynamicTitle = {
+        ...(settings.dynamicTitle || {}),
+        segments: config.segments,
+        agentName: config.agentName,
+        separatorChar: config.separatorChar,
+        separatorPadding: config.separatorPadding,
+        maxTitleLength: config.maxTitleLength,
+      };
+
+      if (!fs.existsSync(settingsDir)) {
+        fs.mkdirSync(settingsDir, { recursive: true });
+      }
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+    } catch (err) {
+      console.error("[pi-dynamic-title] failed to write global settings.json:", err);
+    }
+  }
+
+  function sendTerminalNotification(message: string, ctx: ExtensionContext) {
+    if (notifTimer) {
+      clearTimeout(notifTimer);
+      notifTimer = null;
+    }
+
+    if (!process.stdout.isTTY) return;
+
+    // 1. Send OSC 9 (native terminal notification)
+    process.stdout.write(`\x1b]9;π ${message}\x07`);
+
+    // 2. Fallback OS Notification (osascript on macOS) after 10 seconds if user hasn't focused
+    if (process.platform === "darwin") {
+      notifTimer = setTimeout(() => {
+        notifTimer = null;
+        // Escape quotes to prevent shell/AppleScript syntax errors
+        const escapedMessage = message.replace(/["\\]/g, "\\$&");
+        execFile("osascript", ["-e", `display notification "${escapedMessage}" with title "π"`], (err) => {
+          if (err) {
+            console.error("[pi-dynamic-title] failed to send macOS notification:", err);
+          }
+        });
+      }, 10000);
+    }
+  }
+
   // ===== Event Listeners =====
 
   // Session start -> Load base settings and check saved/active state overrides
   pi.on("session_start", async (_event, ctx) => {
+    currentCtx = ctx;
+    lastSessionName = pi.getSessionName() || "";
     // Enable DECSET 1004 focus tracking
-    process.stdout.write("\x1b[?1004h");
+    if (process.stdout.isTTY) {
+      process.stdout.write("\x1b[?1004h");
+    }
 
     // Reset focus variables
     supportsFocusEvents = false;
     isFocused = true;
-    receivedFocusEvent = false;
 
     // Load configs
     const baseConfig = loadConfig(ctx.cwd);
     Object.assign(config, baseConfig);
 
-    // Apply config overrides saved in this session's history
     const entries = ctx.sessionManager.getBranch();
-    const configEntry = entries.find(
-      (e) => e.type === "custom" && (e as any).customType === "dynamic-title-config"
-    );
-    if (configEntry && (configEntry as any).data) {
-      const savedConfig = (configEntry as any).data;
-      if (Array.isArray(savedConfig.segments)) config.segments = savedConfig.segments;
-      if (typeof savedConfig.agentName === "string") config.agentName = savedConfig.agentName;
-      if (typeof savedConfig.separatorChar === "string") config.separatorChar = savedConfig.separatorChar;
-      if (typeof savedConfig.separatorPadding === "boolean") config.separatorPadding = savedConfig.separatorPadding;
-    }
-
     const hasUserMsg = entries.some(
       (e) => e.type === "message" && e.message.role === "user"
     );
     hasPrompts = hasUserMsg;
+    if (hasPrompts) {
+      cachedFirstPrompt = getFirstUserPrompt(ctx);
+    }
 
     status = "idle";
-    interceptedTitle = "";
     refreshModelName(ctx);
 
     // Resolve default fallback name (Git repository/worktree root or CWD)
@@ -312,7 +346,6 @@ export default function (pi: ExtensionAPI) {
     inputUnsubscribe = ctx.ui.onTerminalInput((data: string) => {
       // \x1b[I -> Terminal Focus In
       if (data === "\x1b[I") {
-        receivedFocusEvent = true;
         supportsFocusEvents = true;
         isFocused = true;
         if (status === "finished") {
@@ -327,7 +360,6 @@ export default function (pi: ExtensionAPI) {
       }
       // \x1b[O -> Terminal Focus Out
       if (data === "\x1b[O") {
-        receivedFocusEvent = true;
         supportsFocusEvents = true;
         isFocused = false;
         clearFinishedTimer();
@@ -350,12 +382,14 @@ export default function (pi: ExtensionAPI) {
 
   // Model changes -> Update segment dynamically
   pi.on("model_select", async (event, ctx) => {
+    currentCtx = ctx;
     modelName = shortModelName(event.model.id);
     updateTitle(ctx);
   });
 
   // Before agent start -> Reset states
   pi.on("before_agent_start", async (event, ctx) => {
+    currentCtx = ctx;
     hasPrompts = true;
     clearFinishedTimer();
     ensureUiWrapped(ctx);
@@ -365,6 +399,7 @@ export default function (pi: ExtensionAPI) {
 
   // Agent loop begins -> Set to running and spin
   pi.on("agent_start", async (_event, ctx) => {
+    currentCtx = ctx;
     status = "running";
     agentStartTime = Date.now();
     ensureUiWrapped(ctx);
@@ -373,6 +408,7 @@ export default function (pi: ExtensionAPI) {
 
   // Agent loop terminates -> Stop animation and notify if configured
   pi.on("agent_end", async (event, ctx) => {
+    currentCtx = ctx;
     stopAnimation();
     clearFinishedTimer();
 
@@ -400,15 +436,21 @@ export default function (pi: ExtensionAPI) {
       inputUnsubscribe();
       inputUnsubscribe = null;
     }
+    if (sessionNamePollTimer) {
+      clearInterval(sessionNamePollTimer);
+    }
+    currentCtx = null;
     // Turn off DECSET 1004 Focus Tracking
-    process.stdout.write("\x1b[?1004l");
+    if (process.stdout.isTTY) {
+      process.stdout.write("\x1b[?1004l");
+    }
   });
 
   // ===== Commands Registration =====
   pi.registerCommand("dynamic-title", {
-    description: "Manage dynamic title: segments, separator, rename",
+    description: "Manage dynamic title: segments, separator, max-length, rename",
     getArgumentCompletions: (prefix: string) => {
-      const subcmds = ["segments", "separator", "rename"];
+      const subcmds = ["segments", "separator", "max-length", "rename"];
       const matches = subcmds.filter((s) => s.startsWith(prefix));
       return matches.length > 0 ? matches.map((s) => ({ value: s, label: s })) : null;
     },
@@ -422,12 +464,14 @@ export default function (pi: ExtensionAPI) {
         const action = await ctx.ui.select("π Dynamic Title", [
           "Segments...",
           "Separator...",
+          "Max Length...",
           "Rename Session...",
           "Show Config",
         ]);
         if (!action) return;
         if (action === "Segments...") await handleSegments(ctx);
         else if (action === "Separator...") await handleSeparator(ctx);
+        else if (action === "Max Length...") await handleMaxLength(ctx);
         else if (action === "Rename Session...") await handleRename(ctx);
         else if (action === "Show Config") showConfig(ctx);
         return;
@@ -437,10 +481,12 @@ export default function (pi: ExtensionAPI) {
         await handleSegments(ctx);
       } else if (subcmd === "separator") {
         await handleSeparator(ctx);
+      } else if (subcmd === "max-length") {
+        await handleMaxLength(ctx);
       } else if (subcmd === "rename") {
         await handleRename(ctx);
       } else {
-        ctx.ui.notify("Usage: /dynamic-title [segments|separator|rename]", "info");
+        ctx.ui.notify("Usage: /dynamic-title [segments|separator|max-length|rename]", "info");
       }
     },
   });
@@ -467,18 +513,19 @@ export default function (pi: ExtensionAPI) {
 
     if (choice === "Custom...") {
       const custom = await ctx.ui.input(
-        "Enter segments (space-separated)",
-        config.segments.join(" ")
+        "Enter custom segments (separated by '|', e.g. status | agent | model)\n" +
+        "Options: \x1b[90mstatus | agent | worktree | model | title\x1b[0m",
+        config.segments.join(" | ")
       );
       if (custom) {
-        const ok = setSegments(config, custom);
-        if (ok) {
+        const result = setSegments(config, custom);
+        if (result.ok) {
           hasPrompts = true;
           updateTitle(ctx);
-          saveConfigToSession(ctx);
-          ctx.ui.notify(`Segments: ${config.segments.join(" ")}`, "info");
+          saveConfigToGlobalSettings();
+          ctx.ui.notify(`Segments: ${config.segments.join(" | ")}`, "info");
         } else {
-          ctx.ui.notify("Invalid: at least one segment required", "error");
+          ctx.ui.notify(result.error || "Invalid segments configuration", "error");
         }
       }
       return;
@@ -489,8 +536,8 @@ export default function (pi: ExtensionAPI) {
       config.segments = [...preset.segments] as any;
       hasPrompts = true;
       updateTitle(ctx);
-      saveConfigToSession(ctx);
-      ctx.ui.notify(`Segments: ${config.segments.join(" ")}`, "info");
+      saveConfigToGlobalSettings();
+      ctx.ui.notify(`Segments: ${config.segments.join(" | ")}`, "info");
     }
   }
 
@@ -517,24 +564,10 @@ export default function (pi: ExtensionAPI) {
       "|  (Vertical Line)",
       "-  (Dash)",
       "·  (Middle Dot)",
-      "Custom...",
     ]);
     if (!charChoice) return;
 
-    let newChar = "";
-    if (charChoice === "Custom...") {
-      const custom = await ctx.ui.input(
-        "Enter custom separator character(s)",
-        config.separatorChar
-      );
-      if (custom !== undefined) {
-        newChar = custom;
-      } else {
-        return;
-      }
-    } else {
-      newChar = charChoice.split(" ")[0];
-    }
+    const newChar = charChoice.split(" ")[0];
 
     const paddingChoice = await ctx.ui.select("Select Separator Spacing", [
       "No spaces (e.g. status/agent/model - default)",
@@ -548,11 +581,32 @@ export default function (pi: ExtensionAPI) {
     config.separatorPadding = newPadding;
     hasPrompts = true;
     updateTitle(ctx);
-    saveConfigToSession(ctx);
+    saveConfigToGlobalSettings();
     ctx.ui.notify(
       `Separator updated to: "${newPadding ? " " + newChar + " " : newChar}"`,
       "info"
     );
+  }
+
+  // Interactive max length configuration
+  async function handleMaxLength(ctx: ExtensionContext) {
+    const currentLen = config.maxTitleLength.toString();
+    const newLen = await ctx.ui.input(
+      "Enter maximum segment length (positive number)",
+      currentLen
+    );
+    if (newLen !== undefined) {
+      const parsed = parseInt(newLen.trim(), 10);
+      if (isNaN(parsed) || parsed <= 0) {
+        ctx.ui.notify("Invalid: must be a positive number", "error");
+        return;
+      }
+      config.maxTitleLength = parsed;
+      hasPrompts = true;
+      updateTitle(ctx);
+      saveConfigToGlobalSettings();
+      ctx.ui.notify(`Max segment length updated to: ${parsed}`, "info");
+    }
   }
 
   // Show config values
@@ -562,12 +616,29 @@ export default function (pi: ExtensionAPI) {
       : `"${config.separatorChar}" (no padding)`;
     ctx.ui.notify(
       `Dynamic Title Config:\n` +
-        `  segments: ${config.segments.join(" ")}\n` +
+        `  segments: ${config.segments.join(" | ")}\n` +
         `  separator: ${displaySep}\n` +
         `  agentName: ${config.agentName}\n` +
         `  animationInterval: ${config.animationInterval}ms\n` +
-        `  successDuration: ${config.successDurationMs}ms`,
+        `  successDuration: ${config.successDurationMs}ms\n` +
+        `  maxTitleLength: ${config.maxTitleLength}`,
       "info"
     );
   }
+
+  // Poll for session name changes to handle renames initiated by TUI core `/name` command
+  const sessionNamePollTimer = setInterval(() => {
+    const currentName = pi.getSessionName() || "";
+    if (currentName !== lastSessionName) {
+      lastSessionName = currentName;
+      if (currentCtx) {
+        if (currentName) {
+          hasPrompts = true;
+        }
+        if (hasPrompts) {
+          updateTitle(currentCtx);
+        }
+      }
+    }
+  }, 1000);
 }

@@ -28,6 +28,13 @@ Model IDs are trimmed to their base names and explicitly abbreviated to save scr
 - **Preview** (and its adjacent hyphens) is explicitly removed (e.g., `gemini-2.0-flash-exp-preview` -> `gemini-2.0-flash-exp`).
 - Targeted replacements are used instead of generic dash normalization to preserve version hyphens (such as in `gemini-1-5-pro`).
 
+### 1.3 Session Title Resolution
+
+The session title (`title` segment) is dynamically evaluated at formatting time using the following order of precedence:
+1. **Custom Name**: The display name set by the user (retrieved via `pi.getSessionName()`).
+2. **First Prompt Fallback**: If no custom name is set, the extension extracts the text content of the first message with role `"user"` from the active conversation branch (`ctx.sessionManager.getBranch()`).
+3. **Worktree Fallback**: If no prompt messages exist, it falls back to the resolved `worktreeName` (directory name of the Git repository/worktree or current directory basename).
+
 ---
 
 ## 2. Configuration Options
@@ -46,6 +53,7 @@ export interface DynamicTitleConfig {
   notifyMinDurationMs: number;
   separatorChar: string;
   separatorPadding: boolean;
+  maxTitleLength: number;
 }
 ```
 
@@ -59,4 +67,4 @@ The subcommand `/dynamic-title` provides interactive setup:
 
 ## 3. UI Interception
 
-- **Interception of setTitle**: To prevent race conditions with Earendil's built-in title overrides, the extension wraps `ctx.ui.setTitle` using `Object.defineProperty`. It intercepts external title updates, sanitizes them, and re-renders the structured title dynamically. No wrappers are applied to `ui.confirm` or `ui.select` to avoid state leaks.
+- **Interception of setTitle**: To prevent race conditions with Earendil's built-in title overrides, the extension wraps `ctx.ui.setTitle` using `Object.defineProperty`. It intercepts external title updates, sanitizes them, and re-renders the structured title dynamically. It does not parse or store the raw input title, but enforces the structured 5-segment title formatting. No wrappers are applied to `ui.confirm` or `ui.select` to avoid state leaks.
