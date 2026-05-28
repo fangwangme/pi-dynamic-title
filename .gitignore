@@ -7,6 +7,9 @@
 # Sisyphus — task orchestration artifacts
 .sisyphus/
 
+# Anti Gravity CLI — tool-generated metadata and config symlinks
+.antigravitycli/
+
 # Node.js — dependencies and build outputs
 node_modules/
 .pnpm-store/

@@ -1,6 +1,6 @@
 ## Project Structure
 
-- **pi-dynamic-title**: A Pi Coding Agent Extension that dynamically updates terminal window titles with a composable four-segment format — status animation, agent name, model name, and intelligent session title.
+- **pi-dynamic-title**: A Pi Coding Agent Extension that dynamically updates terminal window titles with a composable five-segment format — status animation, agent name, git worktree name, model name, and session title.
 - Work in a non-`main` git worktree for normal development.
 - Only modify `main` directly when the user explicitly authorizes template or repository-structure maintenance.
 - Manual worktrees live under `.worktrees/`.
@@ -40,7 +40,6 @@
 ├── src/                      # Extension source code
 │   ├── index.ts              # Extension entry point
 │   ├── config.ts             # Configuration parsing
-│   ├── title-formatter.ts    # Title string formatting
-│   └── title-generator.ts    # LLM title generation
+│   └── title-formatter.ts    # Title string formatting
 ├── package.json
 └── tsconfig.json

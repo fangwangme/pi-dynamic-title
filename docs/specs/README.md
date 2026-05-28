@@ -12,4 +12,4 @@ For feature work, update or create the relevant spec before implementation plann
 
 ## Current Specs
 
-- `pi-dynamic-title-tech-design.md` — Technical design document for the Pi Dynamic Title Extension
+- `pi-dynamic-title.md` — Product requirements for the Pi Dynamic Title Extension (user-facing behavior, configuration, and acceptance criteria).
