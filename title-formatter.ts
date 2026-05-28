@@ -49,16 +49,13 @@ function getStatusContent(status: AgentStatus, frame?: string): string {
 
 /** Formats terminal window title based on config and current state */
 export function formatTitle(state: TitleState, config: DynamicTitleConfig): string {
-  const parts: { segment: string; content: string }[] = [];
+  const parts: string[] = [];
   const maxLen = config.maxTitleLength ?? 50;
 
   for (const segment of config.segments) {
     let content = "";
 
     switch (segment) {
-      case "status":
-        content = getStatusContent(state.status, state.animationFrame);
-        break;
       case "agent":
         content = state.agentName;
         break;
@@ -74,7 +71,7 @@ export function formatTitle(state: TitleState, config: DynamicTitleConfig): stri
     }
 
     if (content) {
-      parts.push({ segment, content: sanitizeTitle(content, maxLen) });
+      parts.push(sanitizeTitle(content, maxLen));
     }
   }
 
@@ -82,27 +79,19 @@ export function formatTitle(state: TitleState, config: DynamicTitleConfig): stri
     ? ` ${config.separatorChar} `
     : config.separatorChar;
 
-  let result = "";
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    if (i === 0) {
-      result = part.content;
-    } else {
-      const prevPart = parts[i - 1];
-      // When the status segment is a running spinner, separate it from adjacent segments with a space instead of the configured separator
-      const isStatusSpinnerRunning =
-        (prevPart.segment === "status" && state.status === "running") ||
-        (part.segment === "status" && state.status === "running");
+  const restTitle = parts.length > 0
+    ? parts.join(sep)
+    : sanitizeTitle(state.sessionTitle || state.worktreeName, maxLen);
 
-      const currentSep = isStatusSpinnerRunning ? " " : sep;
-      result += currentSep + part.content;
-    }
+  const statusContent = getStatusContent(state.status, state.animationFrame);
+
+  if (statusContent && restTitle) {
+    return `${statusContent} ${restTitle}`;
+  } else if (statusContent) {
+    return statusContent;
   }
 
-  // Fallback to title or agent name if all segments are empty
-  return parts.length > 0
-    ? result
-    : sanitizeTitle(state.sessionTitle || state.worktreeName, maxLen) || "π";
+  return restTitle;
 }
 
 /** Extract short model name from full provider/model id string and apply shortening rules */

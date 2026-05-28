@@ -24,8 +24,11 @@ export default function (pi: ExtensionAPI) {
   let cachedFirstPrompt = "";   // Cached first user message to avoid repeated array traversal in animation loop
   let currentCtx: ExtensionContext | null = null;
   let lastSessionName = "";
+  let titleManagementEnabled = false;
   
   let finishedTimer: ReturnType<typeof setTimeout> | null = null;
+  let delayedRefreshTimers: ReturnType<typeof setTimeout>[] = [];
+  let sessionNamePollTimer: ReturnType<typeof setInterval> | null = null;
 
   // Focus-tracking state
   let supportsFocusEvents = false; // Set to true dynamically when focus events are received
@@ -38,6 +41,8 @@ export default function (pi: ExtensionAPI) {
   // ===== Input Subscription =====
   let inputUnsubscribe: (() => void) | null = null;
 
+  const titleRefreshDelaysMs = [50, 150, 400, 1000, 5000, 10000, 20000, 45000];
+
   function stopAnimation() {
     if (animationTimer) {
       clearInterval(animationTimer);
@@ -46,21 +51,34 @@ export default function (pi: ExtensionAPI) {
     frameIndex = 0;
   }
 
+  function isCliTitleContext(ctx: ExtensionContext): boolean {
+    return Boolean(ctx.hasUI && process.stdin.isTTY && process.stdout.isTTY);
+  }
+
+  function getPromptTextFromEntries(entries: readonly any[]): string {
+    const firstUserMsg = entries.find(
+      (e: any) => e.type === "message" && e.message && e.message.role === "user"
+    ) as any;
+    if (!firstUserMsg || !firstUserMsg.message) return "";
+    const content = firstUserMsg.message.content;
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content
+        .filter((c) => c && typeof c === "object" && c.type === "text" && typeof c.text === "string")
+        .map((c) => c.text)
+        .join("");
+    }
+    return "";
+  }
+
   function getFirstUserPrompt(ctx: ExtensionContext): string {
     try {
-      const entries = ctx.sessionManager.getBranch();
-      const firstUserMsg = entries.find(
-        (e: any) => e.type === "message" && e.message && e.message.role === "user"
-      ) as any;
-      if (!firstUserMsg || !firstUserMsg.message) return "";
-      const content = firstUserMsg.message.content;
-      if (typeof content === "string") return content;
-      if (Array.isArray(content)) {
-        return content
-          .filter((c) => c && typeof c === "object" && c.type === "text" && typeof c.text === "string")
-          .map((c) => c.text)
-          .join("");
-      }
+      const branchPrompt = getPromptTextFromEntries(ctx.sessionManager.getBranch());
+      if (branchPrompt) return branchPrompt;
+
+      // On some resume/switch paths the current leaf can be late to settle; the
+      // full entry list still gives us a stable first prompt fallback.
+      return getPromptTextFromEntries(ctx.sessionManager.getEntries());
     } catch (err) {
       console.error("[pi-dynamic-title] failed to get first user prompt:", err);
     }
@@ -72,8 +90,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   function startAnimation(ctx: ExtensionContext) {
+    if (!titleManagementEnabled || !isCliTitleContext(ctx)) return;
     if (!hasPrompts) return;
-    if (!config.segments.includes("status")) return; // Only animate if status segment is enabled
     stopAnimation();
 
     animationTimer = setInterval(() => {
@@ -103,9 +121,13 @@ export default function (pi: ExtensionAPI) {
   }
 
   function updateTitle(ctx: ExtensionContext) {
-    if (!hasPrompts) return;
+    if (!titleManagementEnabled || !isCliTitleContext(ctx)) return;
     // Update the cache of the first user prompt to avoid branch traversal inside the 80ms animation timer
-    cachedFirstPrompt = getFirstUserPrompt(ctx);
+    const firstPrompt = getFirstUserPrompt(ctx);
+    if (firstPrompt) {
+      cachedFirstPrompt = firstPrompt;
+      hasPrompts = true;
+    }
 
     // If agent is currently running, the animation interval handles title updates.
     if (status === "running" && animationTimer) return;
@@ -165,7 +187,54 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  // Intercept setTitle globally to capture session names
+  function clearDelayedRefreshTimers() {
+    for (const timer of delayedRefreshTimers) {
+      clearTimeout(timer);
+    }
+    delayedRefreshTimers = [];
+  }
+
+  function scheduleDelayedTitleRefreshes(ctx: ExtensionContext) {
+    clearDelayedRefreshTimers();
+
+    for (const delay of titleRefreshDelaysMs) {
+      const timer = setTimeout(() => {
+        if (currentCtx !== ctx) return;
+        ensureUiWrapped(ctx);
+        updateTitle(ctx);
+      }, delay);
+      timer.unref?.();
+      delayedRefreshTimers.push(timer);
+    }
+  }
+
+  function startSessionNamePolling() {
+    stopSessionNamePolling();
+
+    sessionNamePollTimer = setInterval(() => {
+      const currentName = pi.getSessionName() || "";
+      if (currentName !== lastSessionName) {
+        lastSessionName = currentName;
+        if (currentCtx) {
+          if (currentName) {
+            hasPrompts = true;
+          }
+          updateTitle(currentCtx);
+        }
+      }
+    }, 1000);
+    sessionNamePollTimer.unref?.();
+  }
+
+  function stopSessionNamePolling() {
+    if (sessionNamePollTimer) {
+      clearInterval(sessionNamePollTimer);
+      sessionNamePollTimer = null;
+    }
+  }
+
+  // Intercept extension-level setTitle calls so Pi/other extensions cannot leave
+  // a raw title in place after our session context is ready.
   function ensureUiWrapped(ctx: ExtensionContext) {
     const ui = ctx.ui as any;
     if (!ui) return;
@@ -183,7 +252,7 @@ export default function (pi: ExtensionAPI) {
             }
             return;
           }
-          if (hasPrompts) {
+          if (titleManagementEnabled && isCliTitleContext(ctx)) {
             updateTitle(ctx);
           } else {
             if (originalSetTitle) {
@@ -266,6 +335,20 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
     lastSessionName = pi.getSessionName() || "";
+    titleManagementEnabled = isCliTitleContext(ctx);
+    clearDelayedRefreshTimers();
+    stopSessionNamePolling();
+
+    if (!titleManagementEnabled) {
+      stopAnimation();
+      clearFinishedTimer();
+      if (inputUnsubscribe) {
+        inputUnsubscribe();
+        inputUnsubscribe = null;
+      }
+      return;
+    }
+
     // Enable DECSET 1004 focus tracking
     if (process.stdout.isTTY) {
       process.stdout.write("\x1b[?1004h");
@@ -279,19 +362,17 @@ export default function (pi: ExtensionAPI) {
     const baseConfig = loadConfig(ctx.cwd);
     Object.assign(config, baseConfig);
 
-    const entries = ctx.sessionManager.getBranch();
+    const entries = ctx.sessionManager.getEntries();
     const hasUserMsg = entries.some(
       (e) => e.type === "message" && e.message.role === "user"
     );
     hasPrompts = hasUserMsg;
-    if (hasPrompts) {
-      cachedFirstPrompt = getFirstUserPrompt(ctx);
-    }
+    cachedFirstPrompt = getFirstUserPrompt(ctx);
 
     status = "idle";
     refreshModelName(ctx);
 
-    // Resolve default fallback name (Git repository/worktree root or CWD)
+    // Resolve default fallback name: Git worktree/repository root, then project directory, then empty.
     let fallbackName = "";
     try {
       // Resolve the top-level directory of the Git worktree/repository
@@ -312,7 +393,7 @@ export default function (pi: ExtensionAPI) {
       fallbackName = path.basename(ctx.cwd || process.cwd());
     }
 
-    worktreeName = fallbackName || "π";
+    worktreeName = fallbackName || "";
 
     // Wrap UI context immediately for interaction hooks
     ensureUiWrapped(ctx);
@@ -344,16 +425,9 @@ export default function (pi: ExtensionAPI) {
       return undefined;
     });
 
+    startSessionNamePolling();
     updateTitle(ctx);
-
-    // Deferred re-wrapping and updating to handle core TUI startup race conditions
-    const delays = [50, 150, 400, 1000];
-    for (const delay of delays) {
-      setTimeout(() => {
-        ensureUiWrapped(ctx);
-        updateTitle(ctx);
-      }, delay);
-    }
+    scheduleDelayedTitleRefreshes(ctx);
   });
 
   // Model changes -> Update segment dynamically
@@ -367,6 +441,9 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     currentCtx = ctx;
     hasPrompts = true;
+    if (event.prompt && !cachedFirstPrompt) {
+      cachedFirstPrompt = event.prompt;
+    }
     clearFinishedTimer();
     ensureUiWrapped(ctx);
 
@@ -397,14 +474,14 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, ctx) => {
     stopAnimation();
     clearFinishedTimer();
+    clearDelayedRefreshTimers();
+    stopSessionNamePolling();
     if (inputUnsubscribe) {
       inputUnsubscribe();
       inputUnsubscribe = null;
     }
-    if (sessionNamePollTimer) {
-      clearInterval(sessionNamePollTimer);
-    }
     currentCtx = null;
+    titleManagementEnabled = false;
     // Turn off DECSET 1004 Focus Tracking
     if (process.stdout.isTTY) {
       process.stdout.write("\x1b[?1004l");
@@ -420,6 +497,7 @@ export default function (pi: ExtensionAPI) {
       return matches.length > 0 ? matches.map((s) => ({ value: s, label: s })) : null;
     },
     handler: async (args, ctx) => {
+      if (!isCliTitleContext(ctx)) return;
       ensureUiWrapped(ctx);
       const parts = args.trim().split(/\s+/);
       const subcmd = parts[0]?.toLowerCase();
@@ -460,16 +538,16 @@ export default function (pi: ExtensionAPI) {
   async function handleSegments(ctx: ExtensionContext) {
     const presets = [
       {
-        label: "status | agent | model | title  (default)",
-        segments: ["status", "agent", "model", "title"],
+        label: "agent | model | title  (default)",
+        segments: ["agent", "model", "title"],
       },
       {
-        label: "status | agent | worktree | model | title  (all 5)",
-        segments: ["status", "agent", "worktree", "model", "title"],
+        label: "agent | worktree | model | title  (all 4)",
+        segments: ["agent", "worktree", "model", "title"],
       },
-      { label: "status | worktree | title", segments: ["status", "worktree", "title"] },
-      { label: "status | worktree", segments: ["status", "worktree"] },
-      { label: "status | title", segments: ["status", "title"] },
+      { label: "worktree | title", segments: ["worktree", "title"] },
+      { label: "worktree", segments: ["worktree"] },
+      { label: "title", segments: ["title"] },
       { label: "Custom...", segments: null },
     ];
 
@@ -478,8 +556,8 @@ export default function (pi: ExtensionAPI) {
 
     if (choice === "Custom...") {
       const custom = await ctx.ui.input(
-        "Enter custom segments (separated by '|', e.g. status | agent | model)\n" +
-        "Options: \x1b[90mstatus | agent | worktree | model | title\x1b[0m",
+        "Enter custom segments (separated by '|', e.g. agent | model)\n" +
+        "Options: \x1b[90magent | worktree | model | title\x1b[0m",
         config.segments.join(" | ")
       );
       if (custom) {
@@ -591,19 +669,4 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  // Poll for session name changes to handle renames initiated by TUI core `/name` command
-  const sessionNamePollTimer = setInterval(() => {
-    const currentName = pi.getSessionName() || "";
-    if (currentName !== lastSessionName) {
-      lastSessionName = currentName;
-      if (currentCtx) {
-        if (currentName) {
-          hasPrompts = true;
-        }
-        if (hasPrompts) {
-          updateTitle(currentCtx);
-        }
-      }
-    }
-  }, 1000);
 }

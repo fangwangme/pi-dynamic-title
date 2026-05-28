@@ -1,28 +1,41 @@
 {
   "name": "pi-dynamic-title",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Pi Coding Agent Extension for dynamic terminal window titles",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "terminal-title"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/fangwangme/pi-dynamic-title.git"
+  },
+  "main": "index.ts",
+  "types": "index.ts",
   "files": [
-    "dist",
+    "index.ts",
+    "config.ts",
+    "title-formatter.ts",
+    "screenshot.png",
     "package.json",
     "README.md",
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsc",
-    "watch": "tsc --watch",
-    "prepare": "tsc"
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "tsc --noEmit"
   },
   "dependencies": {},
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "file:/usr/local/lib/node_modules/@earendil-works/pi-coding-agent",
+    "@earendil-works/pi-coding-agent": "^0.76.0",
     "typescript": "^5.0.0"
   },
   "pi": {
     "extensions": [
-      "./dist/index.js"
+      "./index.ts"
     ]
   }
 }

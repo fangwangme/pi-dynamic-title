@@ -14,6 +14,8 @@
 node_modules/
 .pnpm-store/
 .npm/
+bun.lock
+bun.lockb
 
 # TypeScript build output
 dist/

@@ -2,6 +2,8 @@
 
 Pi Coding Agent Extension that dynamically updates your terminal window/tab title to provide instant status, project context, and workspace feedback.
 
+![Screenshot](screenshot.png)
+
 ## Features
 
 - **5-Segment Composable Title**: Customize your title layout from five available segments:
@@ -38,14 +40,24 @@ The `worktree` segment is available as a configurable option but is disabled by 
 
 ## Installation
 
-### Local Installation
-Copy the built extension folder to your Pi extensions directory:
+To install directly from GitHub:
+
 ```bash
-cp -r ./dist ~/.pi/agent/extensions/pi-dynamic-title
+pi install git:github.com/fangwangme/pi-dynamic-title
 ```
-Alternatively, copy it to a project-local configuration folder:
+
+Or to target a specific version tag:
+
 ```bash
-cp -r ./dist ./.pi/extensions/pi-dynamic-title
+pi install git:github.com/fangwangme/pi-dynamic-title@v0.0.1
+```
+
+### Update
+
+To update the extension to the latest version:
+
+```bash
+pi update git:github.com/fangwangme/pi-dynamic-title
 ```
 
 ---
@@ -86,19 +98,13 @@ Settings are stored in your global `~/.pi/agent/settings.json` under the `dynami
 
 ---
 
-## Development & Build
-
-Ensure you have [Bun](https://bun.sh) installed.
+## Development & Verification
 
 1. Install dependencies:
    ```bash
    bun install
    ```
-2. Build the project:
+2. Check typescript types:
    ```bash
-   bun run build
-   ```
-3. Run watch mode for development:
-   ```bash
-   bun run watch
+   bun run check
    ```
