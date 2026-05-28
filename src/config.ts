@@ -15,12 +15,6 @@ export interface DynamicTitleConfig {
   successDurationMs: number;
   /** Spinner frame characters */
   spinnerFrames: string[];
-  /** Enable system notifications. Default: true */
-  notifications: boolean;
-  /** Notify on completion of long tasks. Default: true */
-  notifyOnComplete: boolean;
-  /** Minimum task duration in ms to trigger completion notification. Default: 5000 */
-  notifyMinDurationMs: number;
   /** Separator character (e.g. "/", "|", "-", "·"). Default: "·" */
   separatorChar: string;
   /** Add padding spaces around separator. Default: true */
@@ -37,9 +31,6 @@ export const DEFAULT_CONFIG: DynamicTitleConfig = Object.freeze({
   animationInterval: 80,
   successDurationMs: 5000,
   spinnerFrames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
-  notifications: true,
-  notifyOnComplete: true,
-  notifyMinDurationMs: 5000,
   separatorChar: "·",
   separatorPadding: true,
   maxTitleLength: 50,
@@ -80,11 +71,6 @@ function mergeSettingsJson(config: DynamicTitleConfig, settingsObj: any) {
   if (typeof dt.successDurationMs === "number" && dt.successDurationMs >= 0) config.successDurationMs = dt.successDurationMs;
   if (Array.isArray(dt.spinnerFrames) && dt.spinnerFrames.length > 0 && dt.spinnerFrames.every((f: any) => typeof f === "string")) {
     config.spinnerFrames = dt.spinnerFrames;
-  }
-  if (typeof dt.notifications === "boolean") config.notifications = dt.notifications;
-  if (typeof dt.notifyOnComplete === "boolean") config.notifyOnComplete = dt.notifyOnComplete;
-  if (typeof dt.notifyMinDurationMs === "number" && dt.notifyMinDurationMs >= 0) {
-    config.notifyMinDurationMs = dt.notifyMinDurationMs;
   }
   if (typeof dt.separatorChar === "string") config.separatorChar = dt.separatorChar;
   if (typeof dt.separatorPadding === "boolean") config.separatorPadding = dt.separatorPadding;

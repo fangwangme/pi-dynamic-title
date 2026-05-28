@@ -48,9 +48,6 @@ export interface DynamicTitleConfig {
   animationInterval: number;
   successDurationMs: number; // Used as fallback timeout
   spinnerFrames: string[];
-  notifications: boolean;
-  notifyOnComplete: boolean;
-  notifyMinDurationMs: number;
   separatorChar: string;
   separatorPadding: boolean;
   maxTitleLength: number;

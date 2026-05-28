@@ -21,7 +21,6 @@ Pi Coding Agent Extension that dynamically updates your terminal window/tab titl
   - Retain version-number hyphens (e.g. `gemini-1-5-pro` stays as-is).
 - **Customizable Separator & Padding**: Choose any separator character (default mid dot `·`) with optional padding spaces around it.
 - **Focus Detection (DECSET 1004)**: Instantly clears the task completion dot `●` when you refocus the terminal window. Falls back to `successDurationMs` when the terminal does not report focus events.
-- **Terminal & System Notifications**: Sends OSC 9 terminal notifications and falls back to macOS system notifications for long-running tasks.
 - **Interactive Commands**: Exposes `/dynamic-title` with subcommands for switching segments, separator, and renaming the session.
 
 ---
@@ -65,10 +64,7 @@ Settings are stored in your global `~/.pi/agent/settings.json` under the `dynami
     "spinnerFrames": ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
     "separatorChar": "·",
     "separatorPadding": true,
-    "maxTitleLength": 50,
-    "notifications": true,
-    "notifyOnComplete": true,
-    "notifyMinDurationMs": 5000
+    "maxTitleLength": 50
   }
 }
 ```

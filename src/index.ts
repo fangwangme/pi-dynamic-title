@@ -1,7 +1,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
-import { exec, execFile } from "node:child_process";
+import { exec } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig, setSegments, type DynamicTitleConfig } from "./config.js";
 import {
@@ -26,8 +26,6 @@ export default function (pi: ExtensionAPI) {
   let lastSessionName = "";
   
   let finishedTimer: ReturnType<typeof setTimeout> | null = null;
-  let notifTimer: ReturnType<typeof setTimeout> | null = null;
-  let agentStartTime = 0;
 
   // Focus-tracking state
   let supportsFocusEvents = false; // Set to true dynamically when focus events are received
@@ -233,8 +231,19 @@ export default function (pi: ExtensionAPI) {
         settings = {};
       }
 
+      const existingDynamicTitle =
+        settings.dynamicTitle && typeof settings.dynamicTitle === "object"
+          ? settings.dynamicTitle
+          : {};
+      const {
+        notifications: _notifications,
+        notifyOnComplete: _notifyOnComplete,
+        notifyMinDurationMs: _notifyMinDurationMs,
+        ...dynamicTitleSettings
+      } = existingDynamicTitle;
+
       settings.dynamicTitle = {
-        ...(settings.dynamicTitle || {}),
+        ...dynamicTitleSettings,
         segments: config.segments,
         agentName: config.agentName,
         separatorChar: config.separatorChar,
@@ -248,32 +257,6 @@ export default function (pi: ExtensionAPI) {
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
     } catch (err) {
       console.error("[pi-dynamic-title] failed to write global settings.json:", err);
-    }
-  }
-
-  function sendTerminalNotification(message: string, ctx: ExtensionContext) {
-    if (notifTimer) {
-      clearTimeout(notifTimer);
-      notifTimer = null;
-    }
-
-    if (!process.stdout.isTTY) return;
-
-    // 1. Send OSC 9 (native terminal notification)
-    process.stdout.write(`\x1b]9;π ${message}\x07`);
-
-    // 2. Fallback OS Notification (osascript on macOS) after 10 seconds if user hasn't focused
-    if (process.platform === "darwin") {
-      notifTimer = setTimeout(() => {
-        notifTimer = null;
-        // Escape quotes to prevent shell/AppleScript syntax errors
-        const escapedMessage = message.replace(/["\\]/g, "\\$&");
-        execFile("osascript", ["-e", `display notification "${escapedMessage}" with title "π"`], (err) => {
-          if (err) {
-            console.error("[pi-dynamic-title] failed to send macOS notification:", err);
-          }
-        });
-      }, 10000);
     }
   }
 
@@ -349,10 +332,6 @@ export default function (pi: ExtensionAPI) {
           status = "idle";
           updateTitle(ctx);
         }
-        if (notifTimer) {
-          clearTimeout(notifTimer);
-          notifTimer = null;
-        }
         return { consume: true };
       }
       // \x1b[O -> Terminal Focus Out
@@ -398,26 +377,19 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_start", async (_event, ctx) => {
     currentCtx = ctx;
     status = "running";
-    agentStartTime = Date.now();
     ensureUiWrapped(ctx);
     startAnimation(ctx);
   });
 
-  // Agent loop terminates -> Stop animation and notify if configured
-  pi.on("agent_end", async (event, ctx) => {
+  // Agent loop terminates -> Stop animation and show completion state
+  pi.on("agent_end", async (_event, ctx) => {
     currentCtx = ctx;
     stopAnimation();
     clearFinishedTimer();
 
-    const duration = Date.now() - agentStartTime;
-    const wasLongRunning = duration >= config.notifyMinDurationMs;
-
     status = "finished";
     updateTitle(ctx);
 
-    if (wasLongRunning && config.notifications && config.notifyOnComplete && !isFocused) {
-      sendTerminalNotification("Task completed", ctx);
-    }
     scheduleFinishedFade(ctx);
   });
 
@@ -425,10 +397,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, ctx) => {
     stopAnimation();
     clearFinishedTimer();
-    if (notifTimer) {
-      clearTimeout(notifTimer);
-      notifTimer = null;
-    }
     if (inputUnsubscribe) {
       inputUnsubscribe();
       inputUnsubscribe = null;

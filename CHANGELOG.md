@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **Simplified Status States**: Reduced visual status indicators to two active states: `running` (Braille spinner animation) and `finished` (completion dot `●` that disappears upon terminal window refocusing or falls back to a 5-second automatic timeout).
+- **Title-Only Scope**: Removed terminal and system completion notifications so the extension only manages terminal titles.
 - **Cleanup and Optimization**: Removed all dead code (such as confirm/select dialog wrappers, user prompt traversals, and deprecated settings/notifications like `notifyOnAuth`).
 - **Robust Focus Detection**: Transitioned to dynamic focus detection that activates support on the first received terminal escape sequence rather than relying on a startup timer.
 - **Documentation & Localization**: Cleaned up codebase and updated technical design, release guides, and README files to be 100% in English and fully consistent with the new design.

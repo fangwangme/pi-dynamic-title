@@ -83,15 +83,7 @@ The extension must send terminal escape sequences (`\x1b[?1004h` and `\x1b[?1004
 
 ### FR-8 Non-TTY Safety
 
-The extension must not write terminal control sequences or OSC notifications when `process.stdout.isTTY` is false (e.g. Pi RPC/print modes where stdout is reserved for JSONL or final output).
-
-### FR-9 Notifications (Optional)
-
-When a long-running task (duration ≥ `notifyMinDurationMs`) completes while the terminal is not focused, the extension should send a notification:
-1. Native terminal notification via OSC 9.
-2. Fallback to macOS `osascript` notification if the user has not refocused within 10 seconds.
-
-This feature can be disabled via configuration (`notifications: false`, `notifyOnComplete: false`).
+The extension must not write terminal control sequences when `process.stdout.isTTY` is false (e.g. Pi RPC/print modes where stdout is reserved for JSONL or final output).
 
 ---
 
@@ -109,9 +101,6 @@ All settings live under the `dynamicTitle` key in `~/.pi/agent/settings.json` (g
 | `separatorChar` | `string` | `"·"` | Joining character between segments |
 | `separatorPadding` | `boolean` | `true` | Add spaces around `separatorChar` |
 | `maxTitleLength` | `number` | `50` | Max characters per segment before truncating with `…` |
-| `notifications` | `boolean` | `true` | Enable notification system |
-| `notifyOnComplete` | `boolean` | `true` | Notify when long tasks finish |
-| `notifyMinDurationMs` | `number` | `5000` | Task duration threshold to trigger notification |
 
 Environment variables (highest priority, optional):
 - `PI_DYNAMIC_TITLE_SEGMENTS`: space-separated segment list override
