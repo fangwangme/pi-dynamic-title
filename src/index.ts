@@ -5,6 +5,7 @@ import { loadConfig, setSegments, type DynamicTitleConfig } from "./config.js";
 import {
   formatTitle,
   shortModelName,
+  cleanInterceptedTitle,
   type AgentStatus,
   type TitleState,
 } from "./title-formatter.js";
@@ -17,12 +18,18 @@ export default function (pi: ExtensionAPI) {
   let status: AgentStatus = "idle";
   let modelName = "";           // Short model name (e.g. "claude-sonnet-4")
   let worktreeName = "";        // Git worktree name or cwd basename fallback
-  let needsAuth = false;
-  let hadError = false;
+  let isUpdatingSelf = false;   // Guard flag to prevent infinite loops in setTitle wrapping
+  let interceptedTitle = "";    // Captured from external ui.setTitle calls
+  let hasPrompts = false;       // Track if we have prompts in history or agent run started
   
-  let successTimer: ReturnType<typeof setTimeout> | null = null;
+  let finishedTimer: ReturnType<typeof setTimeout> | null = null;
   let notifTimer: ReturnType<typeof setTimeout> | null = null;
   let agentStartTime = 0;
+
+  // Focus-tracking state
+  let supportsFocusEvents = false; // Set to true dynamically when focus events are received
+  let isFocused = true;           // Assume focused initially
+  let receivedFocusEvent = false; // Tracks if we have received a focus event
 
   // ===== Animation control =====
   let animationTimer: ReturnType<typeof setInterval> | null = null;
@@ -40,6 +47,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   function startAnimation(ctx: ExtensionContext) {
+    ensureUiWrapped(ctx);
+    if (!hasPrompts) return;
     stopAnimation();
     animationTimer = setInterval(() => {
       const frame = config.spinnerFrames[frameIndex % config.spinnerFrames.length];
@@ -49,19 +58,26 @@ export default function (pi: ExtensionAPI) {
           agentName: config.agentName,
           modelName,
           worktreeName,
-          sessionTitle: pi.getSessionName() || "",
+          sessionTitle: pi.getSessionName() || interceptedTitle || getFirstUserPrompt(ctx) || "",
           animationFrame: frame,
         },
         config
       );
       if (ctx.hasUI) {
-        ctx.ui.setTitle(title);
+        isUpdatingSelf = true;
+        try {
+          ctx.ui.setTitle(title);
+        } finally {
+          isUpdatingSelf = false;
+        }
       }
       frameIndex++;
     }, config.animationInterval);
   }
 
   function updateTitle(ctx: ExtensionContext) {
+    ensureUiWrapped(ctx);
+    if (!hasPrompts) return;
     // If agent is currently running, the animation interval handles title updates.
     if (status === "running" && animationTimer) return;
 
@@ -71,33 +87,55 @@ export default function (pi: ExtensionAPI) {
         agentName: config.agentName,
         modelName,
         worktreeName,
-        sessionTitle: pi.getSessionName() || "",
+        sessionTitle: pi.getSessionName() || interceptedTitle || getFirstUserPrompt(ctx) || "",
       },
       config
     );
     if (ctx.hasUI) {
-      ctx.ui.setTitle(title);
+      isUpdatingSelf = true;
+      try {
+        ctx.ui.setTitle(title);
+      } finally {
+        isUpdatingSelf = false;
+      }
     }
   }
 
-  // ===== Success Status Fade-out =====
-  function scheduleSuccessFade(ctx: ExtensionContext) {
-    clearSuccessTimer();
-    if (config.successDurationMs > 0) {
-      successTimer = setTimeout(() => {
-        if (status === "success") {
+  // ===== Finished Status Fade-out =====
+  function scheduleFinishedFade(ctx: ExtensionContext) {
+    clearFinishedTimer();
+
+    if (!supportsFocusEvents) {
+      // If terminal doesn't support focus events, wait 5 seconds and fade out.
+      finishedTimer = setTimeout(() => {
+        if (status === "finished") {
           status = "idle";
           updateTitle(ctx);
         }
-        successTimer = null;
-      }, config.successDurationMs);
+        finishedTimer = null;
+      }, 5000);
+      return;
+    }
+
+    if (isFocused) {
+      // If the user has been active in this window, wait 2 seconds and fade out.
+      finishedTimer = setTimeout(() => {
+        if (status === "finished") {
+          status = "idle";
+          updateTitle(ctx);
+        }
+        finishedTimer = null;
+      }, 2000);
+    } else {
+      // If the user is currently focused elsewhere (out of focus), wait forever.
+      // The status will be cleared immediately when they focus back in (Focus In event).
     }
   }
 
-  function clearSuccessTimer() {
-    if (successTimer) {
-      clearTimeout(successTimer);
-      successTimer = null;
+  function clearFinishedTimer() {
+    if (finishedTimer) {
+      clearTimeout(finishedTimer);
+      finishedTimer = null;
     }
   }
 
@@ -107,9 +145,9 @@ export default function (pi: ExtensionAPI) {
     modelName = model ? shortModelName(model.id) : "";
   }
 
-  function getLastUserPrompt(ctx: ExtensionContext): string {
+  function getFirstUserPrompt(ctx: ExtensionContext): string {
     const entries = ctx.sessionManager.getBranch();
-    for (let i = entries.length - 1; i >= 0; i--) {
+    for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
       if (entry.type === "message" && entry.message.role === "user") {
         const content = entry.message.content;
@@ -129,6 +167,8 @@ export default function (pi: ExtensionAPI) {
     pi.appendEntry("dynamic-title-config", {
       segments: config.segments,
       agentName: config.agentName,
+      separatorChar: config.separatorChar,
+      separatorPadding: config.separatorPadding,
     });
   }
 
@@ -150,64 +190,49 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  // Intercept confirm and select prompts globally to support Needs Auth state detection
+  // Intercept setTitle globally to capture session names
   function ensureUiWrapped(ctx: ExtensionContext) {
     const ui = ctx.ui as any;
-    if (!ui || ui.__wrapped) return;
+    if (!ui) return;
 
     try {
-      ui.__wrapped = true;
-      const originalConfirm = ui.confirm;
-      if (originalConfirm) {
-        ui.confirm = async function (title: string, message: string, opts?: any) {
-          const prevStatus = status;
-          if (status === "running") {
-            status = "needs_auth";
-            needsAuth = true;
-            updateTitle(ctx);
-            if (config.notifications && config.notifyOnAuth) {
-              sendTerminalNotification(`需要授权: ${message || title}`, ctx);
+      // Wrap setTitle using Object.defineProperty to intercept all future assignments
+      if (!ui.__setTitleWrapped) {
+        let originalSetTitle = ui.setTitle;
+        const currentSetTitle = function (newTitle: string) {
+          if (isUpdatingSelf) {
+            if (originalSetTitle) {
+              originalSetTitle.call(ui, newTitle);
+            } else {
+              process.stdout.write(`\x1b]0;${newTitle}\x07`);
             }
+            return;
           }
-          try {
-            return await originalConfirm.call(ui, title, message, opts);
-          } finally {
-            if (status === "needs_auth") {
-              status = prevStatus;
-              updateTitle(ctx);
+          interceptedTitle = cleanInterceptedTitle(newTitle);
+          if (hasPrompts) {
+            updateTitle(ctx);
+          } else {
+            if (originalSetTitle) {
+              originalSetTitle.call(ui, newTitle);
+            } else {
+              process.stdout.write(`\x1b]0;${newTitle}\x07`);
             }
           }
         };
-      }
+        (currentSetTitle as any).__isWrapped = true;
 
-      const originalSelect = ui.select;
-      if (originalSelect) {
-        ui.select = async function (title: string, options: string[], opts?: any) {
-          // Exclude our own configuration menus from triggering auth/needs_auth state
-          const isOwnMenu =
-            title === "π Dynamic Title" ||
-            title === "Title Segments" ||
-            title === "Title Generation Model";
-          const prevStatus = status;
-          const shouldChangeStatus = status === "running" && !isOwnMenu;
-
-          if (shouldChangeStatus) {
-            status = "needs_auth";
-            needsAuth = true;
-            updateTitle(ctx);
-            if (config.notifications && config.notifyOnAuth) {
-              sendTerminalNotification(`需要确认选择: ${title}`, ctx);
-            }
-          }
-          try {
-            return await originalSelect.call(ui, title, options, opts);
-          } finally {
-            if (shouldChangeStatus && status === "needs_auth") {
-              status = prevStatus;
-              updateTitle(ctx);
-            }
-          }
-        };
+        Object.defineProperty(ui, "setTitle", {
+          get() {
+            return currentSetTitle;
+          },
+          set(newVal) {
+            if (newVal === currentSetTitle) return;
+            originalSetTitle = newVal;
+          },
+          configurable: true,
+          enumerable: true,
+        });
+        ui.__setTitleWrapped = true;
       }
     } catch (err) {
       console.error("[pi-dynamic-title] failed to wrap UI context methods:", err);
@@ -220,6 +245,11 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     // Enable DECSET 1004 focus tracking
     process.stdout.write("\x1b[?1004h");
+
+    // Reset focus variables
+    supportsFocusEvents = false;
+    isFocused = true;
+    receivedFocusEvent = false;
 
     // Load configs
     const baseConfig = loadConfig(ctx.cwd);
@@ -234,11 +264,17 @@ export default function (pi: ExtensionAPI) {
       const savedConfig = (configEntry as any).data;
       if (Array.isArray(savedConfig.segments)) config.segments = savedConfig.segments;
       if (typeof savedConfig.agentName === "string") config.agentName = savedConfig.agentName;
+      if (typeof savedConfig.separatorChar === "string") config.separatorChar = savedConfig.separatorChar;
+      if (typeof savedConfig.separatorPadding === "boolean") config.separatorPadding = savedConfig.separatorPadding;
     }
 
+    const hasUserMsg = entries.some(
+      (e) => e.type === "message" && e.message.role === "user"
+    );
+    hasPrompts = hasUserMsg;
+
     status = "idle";
-    needsAuth = false;
-    hadError = false;
+    interceptedTitle = "";
     refreshModelName(ctx);
 
     // Resolve default fallback name (Git repository/worktree root or CWD)
@@ -276,7 +312,10 @@ export default function (pi: ExtensionAPI) {
     inputUnsubscribe = ctx.ui.onTerminalInput((data: string) => {
       // \x1b[I -> Terminal Focus In
       if (data === "\x1b[I") {
-        if (status === "success") {
+        receivedFocusEvent = true;
+        supportsFocusEvents = true;
+        isFocused = true;
+        if (status === "finished") {
           status = "idle";
           updateTitle(ctx);
         }
@@ -288,12 +327,25 @@ export default function (pi: ExtensionAPI) {
       }
       // \x1b[O -> Terminal Focus Out
       if (data === "\x1b[O") {
+        receivedFocusEvent = true;
+        supportsFocusEvents = true;
+        isFocused = false;
+        clearFinishedTimer();
         return { consume: true };
       }
       return undefined;
     });
 
     updateTitle(ctx);
+
+    // Deferred re-wrapping and updating to handle core TUI startup race conditions
+    const delays = [50, 150, 400, 1000];
+    for (const delay of delays) {
+      setTimeout(() => {
+        ensureUiWrapped(ctx);
+        updateTitle(ctx);
+      }, delay);
+    }
   });
 
   // Model changes -> Update segment dynamically
@@ -304,9 +356,8 @@ export default function (pi: ExtensionAPI) {
 
   // Before agent start -> Reset states
   pi.on("before_agent_start", async (event, ctx) => {
-    needsAuth = false;
-    hadError = false;
-    clearSuccessTimer();
+    hasPrompts = true;
+    clearFinishedTimer();
     ensureUiWrapped(ctx);
 
     updateTitle(ctx);
@@ -321,46 +372,26 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Agent loop terminates -> Stop animation and notify if configured
-  pi.on("agent_end", async (_event, ctx) => {
+  pi.on("agent_end", async (event, ctx) => {
     stopAnimation();
-    clearSuccessTimer();
+    clearFinishedTimer();
 
     const duration = Date.now() - agentStartTime;
     const wasLongRunning = duration >= config.notifyMinDurationMs;
 
-    if (needsAuth) {
-      status = "needs_auth";
-    } else if (hadError) {
-      status = "error";
-    } else {
-      status = "success";
-    }
-
+    status = "finished";
     updateTitle(ctx);
 
-    if (status === "needs_auth") {
-      if (config.notifications && config.notifyOnAuth) {
-        sendTerminalNotification("需要授权", ctx);
-      }
-    } else if (status === "success") {
-      if (wasLongRunning && config.notifications && config.notifyOnComplete) {
-        sendTerminalNotification("任务完成", ctx);
-      }
-      scheduleSuccessFade(ctx);
+    if (wasLongRunning && config.notifications && config.notifyOnComplete) {
+      sendTerminalNotification("Task completed", ctx);
     }
-  });
-
-  // Tool execution results -> Track error occurrences
-  pi.on("tool_result", async (event, _ctx) => {
-    if (event.isError) {
-      hadError = true;
-    }
+    scheduleFinishedFade(ctx);
   });
 
   // Session shut down -> Clean up timers and unregister focus tracking
   pi.on("session_shutdown", async (_event, ctx) => {
     stopAnimation();
-    clearSuccessTimer();
+    clearFinishedTimer();
     if (notifTimer) {
       clearTimeout(notifTimer);
       notifTimer = null;
@@ -375,9 +406,9 @@ export default function (pi: ExtensionAPI) {
 
   // ===== Commands Registration =====
   pi.registerCommand("dynamic-title", {
-    description: "Manage dynamic title: segments, rename",
+    description: "Manage dynamic title: segments, separator, rename",
     getArgumentCompletions: (prefix: string) => {
-      const subcmds = ["segments", "rename"];
+      const subcmds = ["segments", "separator", "rename"];
       const matches = subcmds.filter((s) => s.startsWith(prefix));
       return matches.length > 0 ? matches.map((s) => ({ value: s, label: s })) : null;
     },
@@ -390,11 +421,13 @@ export default function (pi: ExtensionAPI) {
         // Main select menu
         const action = await ctx.ui.select("π Dynamic Title", [
           "Segments...",
+          "Separator...",
           "Rename Session...",
           "Show Config",
         ]);
         if (!action) return;
         if (action === "Segments...") await handleSegments(ctx);
+        else if (action === "Separator...") await handleSeparator(ctx);
         else if (action === "Rename Session...") await handleRename(ctx);
         else if (action === "Show Config") showConfig(ctx);
         return;
@@ -402,10 +435,12 @@ export default function (pi: ExtensionAPI) {
 
       if (subcmd === "segments") {
         await handleSegments(ctx);
+      } else if (subcmd === "separator") {
+        await handleSeparator(ctx);
       } else if (subcmd === "rename") {
         await handleRename(ctx);
       } else {
-        ctx.ui.notify("Usage: /dynamic-title [segments|rename]", "info");
+        ctx.ui.notify("Usage: /dynamic-title [segments|separator|rename]", "info");
       }
     },
   });
@@ -438,6 +473,7 @@ export default function (pi: ExtensionAPI) {
       if (custom) {
         const ok = setSegments(config, custom);
         if (ok) {
+          hasPrompts = true;
           updateTitle(ctx);
           saveConfigToSession(ctx);
           ctx.ui.notify(`Segments: ${config.segments.join(" ")}`, "info");
@@ -451,6 +487,7 @@ export default function (pi: ExtensionAPI) {
     const preset = presets.find((p) => p.label === choice);
     if (preset && preset.segments) {
       config.segments = [...preset.segments] as any;
+      hasPrompts = true;
       updateTitle(ctx);
       saveConfigToSession(ctx);
       ctx.ui.notify(`Segments: ${config.segments.join(" ")}`, "info");
@@ -459,20 +496,74 @@ export default function (pi: ExtensionAPI) {
 
   // Interactive session renaming
   async function handleRename(ctx: ExtensionContext) {
-    const currentName = pi.getSessionName() || worktreeName;
-    const newName = await ctx.ui.input("Enter session name", currentName);
+    const currentName = pi.getSessionName() || "";
+    const newName = await ctx.ui.input(
+      "Enter session name (leave blank to use default)",
+      currentName
+    );
     if (newName !== undefined) {
-      pi.setSessionName(newName);
+      const trimmed = newName.trim();
+      pi.setSessionName(trimmed);
+      hasPrompts = true;
       updateTitle(ctx);
-      ctx.ui.notify(`Session renamed to: ${newName || "(default)"}`, "info");
+      ctx.ui.notify(`Session renamed to: ${trimmed || "(default)"}`, "info");
     }
+  }
+
+  // Interactive separator configuration
+  async function handleSeparator(ctx: ExtensionContext) {
+    const charChoice = await ctx.ui.select("Select Separator Character", [
+      "/  (Slash - default)",
+      "|  (Vertical Line)",
+      "-  (Dash)",
+      "·  (Middle Dot)",
+      "Custom...",
+    ]);
+    if (!charChoice) return;
+
+    let newChar = "";
+    if (charChoice === "Custom...") {
+      const custom = await ctx.ui.input(
+        "Enter custom separator character(s)",
+        config.separatorChar
+      );
+      if (custom !== undefined) {
+        newChar = custom;
+      } else {
+        return;
+      }
+    } else {
+      newChar = charChoice.split(" ")[0];
+    }
+
+    const paddingChoice = await ctx.ui.select("Select Separator Spacing", [
+      "No spaces (e.g. status/agent/model - default)",
+      "With spaces (e.g. status / agent / model)",
+    ]);
+    if (!paddingChoice) return;
+
+    const newPadding = paddingChoice.includes("With spaces");
+
+    config.separatorChar = newChar;
+    config.separatorPadding = newPadding;
+    hasPrompts = true;
+    updateTitle(ctx);
+    saveConfigToSession(ctx);
+    ctx.ui.notify(
+      `Separator updated to: "${newPadding ? " " + newChar + " " : newChar}"`,
+      "info"
+    );
   }
 
   // Show config values
   function showConfig(ctx: ExtensionContext) {
+    const displaySep = config.separatorPadding
+      ? `"${config.separatorChar}" (with padding)`
+      : `"${config.separatorChar}" (no padding)`;
     ctx.ui.notify(
       `Dynamic Title Config:\n` +
         `  segments: ${config.segments.join(" ")}\n` +
+        `  separator: ${displaySep}\n` +
         `  agentName: ${config.agentName}\n` +
         `  animationInterval: ${config.animationInterval}ms\n` +
         `  successDuration: ${config.successDurationMs}ms`,

@@ -1,6 +1,6 @@
 import type { DynamicTitleConfig } from "./config.js";
 
-export type AgentStatus = "idle" | "running" | "needs_auth" | "error" | "success";
+export type AgentStatus = "idle" | "running" | "finished";
 
 export interface TitleState {
   status: AgentStatus;
@@ -11,7 +11,7 @@ export interface TitleState {
   animationFrame?: string;
 }
 
-const SEPARATOR = " | ";
+
 
 /**
  * Clean up title:
@@ -42,11 +42,7 @@ function getStatusContent(status: AgentStatus, frame?: string): string {
       return "";
     case "running":
       return frame ?? "";
-    case "needs_auth":
-      return "!";
-    case "error":
-      return "✗";
-    case "success":
+    case "finished":
       return "●";
   }
 }
@@ -73,7 +69,7 @@ export function formatTitle(state: TitleState, config: DynamicTitleConfig): stri
         content = state.modelName;
         break;
       case "title":
-        content = state.sessionTitle || (hasWorktreeSegment ? "" : state.worktreeName);
+        content = state.sessionTitle || "";
         break;
     }
 
@@ -82,14 +78,46 @@ export function formatTitle(state: TitleState, config: DynamicTitleConfig): stri
     }
   }
 
+  const sep = config.separatorPadding
+    ? ` ${config.separatorChar} `
+    : config.separatorChar;
+
   // Fallback to title or agent name if all segments are empty
   return parts.length > 0
-    ? parts.join(SEPARATOR)
+    ? parts.join(sep)
     : sanitizeTitle(state.sessionTitle || state.worktreeName) || "π";
 }
 
-/** Extract short model name from full provider/model id string */
+/** Extract short model name from full provider/model id string and apply shortening rules */
 export function shortModelName(fullModelId: string): string {
   if (!fullModelId) return "";
-  return fullModelId.split("/").pop() ?? fullModelId;
+  let name = fullModelId.split("/").pop() ?? fullModelId;
+
+  // Apply explicit abbreviations and clean-ups (case-insensitive)
+  name = name.replace(/deepseek/gi, "DS");
+  
+  // Explicitly remove "claude" and its trailing/leading hyphen
+  name = name.replace(/^claude-?/gi, "");
+  name = name.replace(/-claude-?/gi, "-");
+  
+  // Explicitly remove "preview" and its trailing/leading hyphen
+  name = name.replace(/-?preview$/gi, "");
+  name = name.replace(/-?preview-?/gi, "-");
+
+  return name.trim();
 }
+
+/**
+ * Extract clean session name from an intercepted terminal title.
+ * Strips common status icons and pi/π prefixes.
+ */
+export function cleanInterceptedTitle(title: string): string {
+  if (!title) return "";
+  let clean = title.trim();
+  // Strip common status prefixes like "●", "✗", "!", spinner frames
+  clean = clean.replace(/^[●✗\!⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*/g, "");
+  // Strip "π", "pi", "π -", "pi -", "π |", "pi |" at the beginning (case-insensitive)
+  clean = clean.replace(/^(π|pi)\s*([\-\|·•−—–]\s*)?/i, "");
+  return clean.trim();
+}
+

@@ -12,7 +12,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "prepare": "tsc"
   },
   "dependencies": {},
   "devDependencies": {

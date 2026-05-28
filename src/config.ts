@@ -19,10 +19,12 @@ export interface DynamicTitleConfig {
   notifications: boolean;
   /** Notify on completion of long tasks. Default: true */
   notifyOnComplete: boolean;
-  /** Notify when waiting for user authorization. Default: true */
-  notifyOnAuth: boolean;
   /** Minimum task duration in ms to trigger completion notification. Default: 5000 */
   notifyMinDurationMs: number;
+  /** Separator character (e.g. "/", "|", "-", "·"). Default: "·" */
+  separatorChar: string;
+  /** Add padding spaces around separator. Default: true */
+  separatorPadding: boolean;
 }
 
 const DEFAULT_SEGMENTS: TitleSegment[] = ["status", "agent", "model", "title"];
@@ -35,8 +37,9 @@ export const DEFAULT_CONFIG: DynamicTitleConfig = {
   spinnerFrames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
   notifications: true,
   notifyOnComplete: true,
-  notifyOnAuth: true,
   notifyMinDurationMs: 5000,
+  separatorChar: "·",
+  separatorPadding: true,
 };
 
 const VALID_SEGMENTS = new Set<string>(["status", "agent", "worktree", "model", "title"]);
@@ -71,10 +74,11 @@ function mergeSettingsJson(config: DynamicTitleConfig, settingsObj: any) {
   }
   if (typeof dt.notifications === "boolean") config.notifications = dt.notifications;
   if (typeof dt.notifyOnComplete === "boolean") config.notifyOnComplete = dt.notifyOnComplete;
-  if (typeof dt.notifyOnAuth === "boolean") config.notifyOnAuth = dt.notifyOnAuth;
   if (typeof dt.notifyMinDurationMs === "number" && dt.notifyMinDurationMs >= 0) {
     config.notifyMinDurationMs = dt.notifyMinDurationMs;
   }
+  if (typeof dt.separatorChar === "string") config.separatorChar = dt.separatorChar;
+  if (typeof dt.separatorPadding === "boolean") config.separatorPadding = dt.separatorPadding;
 }
 
 /** Load config by merging defaults, settings.json, and env variables */

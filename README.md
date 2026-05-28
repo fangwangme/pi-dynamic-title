@@ -5,20 +5,26 @@ Pi Coding Agent Extension that dynamically updates your terminal window/tab titl
 ## Features
 
 - **5-Segment Composable Title**: Customize your title layout from five available segments:
-  - `status`: Clean status indicator (Braille spinner for running, `●` for success, `!` for needs auth, `✗` for errors, empty when idle).
+  - `status`: Runtime status indicator. Shows a Braille spinner (e.g. `⠋`) when running, a completion dot `●` when a task finishes, and empty when idle.
   - `agent`: Agent display name (defaults to `π`).
   - `worktree`: Git worktree / repository top-level directory name (defaults to CWD basename if outside Git).
-  - `model`: Short name of the currently active model (e.g. `claude-sonnet-4`).
+  - `model`: Explicitly mapped short model name (e.g., `sonnet-4`, `DS-chat`, `gemini-2.0-flash`).
   - `title`: Direct display of the Pi Session Name.
-- **No LLM Dependencies**: Completely simplified title displaying. Directly displays the session name (with worktree name fallback if empty). Zero API network calls, zero API-key dependencies, and zero latency.
+- **No LLM Dependencies**: Completely simplified title rendering. Directly displays the session name (with worktree name fallback if empty). Zero API network calls, zero API-key dependencies, and zero latency.
+- **Dynamic Model Name Mapping**: Trims model names to save valuable terminal title space:
+  - Strip provider path prefix (e.g., `anthropic/claude-sonnet-4` -> `claude-sonnet-4`).
+  - Map `deepseek` to `DS` (case-insensitive, e.g., `deepseek-chat` -> `DS-chat`).
+  - Remove `claude` and its surrounding hyphens (e.g., `claude-sonnet-4` -> `sonnet-4`).
+  - Remove `preview` and its surrounding hyphens (e.g., `gemini-2.0-flash-exp-preview` -> `gemini-2.0-flash-exp`).
+  - Retain specific hyphens representing version numbers (e.g. `gemini-1-5-pro` is not normalized).
+- **Default Separator & Padding**: Employs a padded mid dot ` · ` (configurable separator character with optional padding spaces around it) to cleanly join enabled segments.
 - **Smart Fallback & Duplication Guard**:
   - If the `worktree` segment is **not** active, the `title` segment automatically falls back to the Git worktree/repository name when no explicit session name is set.
   - If both `worktree` and `title` segments are active, duplication is automatically guarded: the `title` segment remains empty until you explicitly rename the session.
-- **Authorization Gating Capture**: Intercepts confirmation and selection TUI dialogs dynamically to toggle status to `needs_auth` (`!`) and send notifications.
-- **Focus Detection (DECSET 1004)**: Consumes focus-in/out escapes to instantly clear the success indicator `●` when the user refocuses the terminal window.
-- **Terminal & System Notifications**: Dual-track notification support sending OSC 9 native terminal commands and falls back to macOS `osascript` notifications if user focus remains away for 10 seconds.
+- **Focus Detection (DECSET 1004)**: Instantly clears the task completion dot `●` when you refocus the terminal window. If already focused, it falls back to a 5-second automatic timeout.
+- **Terminal & System Notifications**: Dual-track notification support: sends terminal OSC 9 commands and falls back to system notifications for long-running tasks.
 - **Interactive Commands**: Exposes `/dynamic-title` command with subcommands:
-  - `/dynamic-title segments`: Select segment presets (e.g. status only, status | worktree | title, etc.) or enter custom layouts.
+  - `/dynamic-title segments`: Select segment presets or enter custom layouts.
   - `/dynamic-title rename`: Interactively rename the current Pi session name, instantly updating the title.
 
 ---
@@ -59,8 +65,9 @@ You can customize the extension parameters inside your global `~/.pi/agent/setti
     "successDurationMs": 5000,
     "notifications": true,
     "notifyOnComplete": true,
-    "notifyOnAuth": true,
-    "notifyMinDurationMs": 5000
+    "notifyMinDurationMs": 5000,
+    "separatorChar": "·",
+    "separatorPadding": true
   }
 }
 ```
