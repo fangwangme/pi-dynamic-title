@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-export type TitleSegment = "status" | "agent" | "worktree" | "model" | "title";
+export type TitleSegment = "agent" | "worktree" | "model" | "title";
 
 export interface DynamicTitleConfig {
-  /** Enabled segments, at least one required. Default: ["status", "agent", "model", "title"] */
+  /** Enabled segments, at least one required. Default: ["agent", "model", "title"] */
   segments: TitleSegment[];
   /** Agent display name. Default: "π" */
   agentName: string;
@@ -23,7 +23,7 @@ export interface DynamicTitleConfig {
   maxTitleLength: number;
 }
 
-const DEFAULT_SEGMENTS: TitleSegment[] = ["status", "agent", "model", "title"];
+const DEFAULT_SEGMENTS: TitleSegment[] = ["agent", "model", "title"];
 
 export const DEFAULT_CONFIG: DynamicTitleConfig = Object.freeze({
   segments: [...DEFAULT_SEGMENTS],
@@ -36,7 +36,7 @@ export const DEFAULT_CONFIG: DynamicTitleConfig = Object.freeze({
   maxTitleLength: 50,
 });
 
-const VALID_SEGMENTS = new Set<string>(["status", "agent", "worktree", "model", "title"]);
+const VALID_SEGMENTS = new Set<string>(["agent", "worktree", "model", "title"]);
 
 /** Parse segment options string (e.g. "status | agent | model | title") */
 export function parseSegments(input: string): TitleSegment[] | null {

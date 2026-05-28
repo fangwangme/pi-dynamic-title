@@ -9,6 +9,10 @@ All notable changes to this project will be documented in this file.
 - **Customizable Separator**: Supports separator character configuration (defaulting to mid dot ` · `) with optional padding spacing.
 
 ### Changed
+- **Buildless TypeScript Loading**: Switched to loading direct `.ts` files dynamically via `jiti` without pre-compilation. Removed `dist/` directory and build script setups.
+- **Always-Prepended Status Prefix**: Pulled `status` out of the configurable `segments` list. It is now always automatically prepended with a space to the rest of the formatted title segments, reducing configuration complexity.
+- **Git-Only Release Workflow**: Removed NPM packaging scripts and references, switching purely to Git tag/Release versioning.
+- **Flattened Repository Layout**: Relocated source files from `src/` to the root directory. Cleaned up devDependencies and removed local lockfiles (`bun.lock`).
 - **Simplified Status States**: Reduced visual status indicators to two active states: `running` (Braille spinner animation) and `finished` (completion dot `●` that disappears upon terminal window refocusing or falls back to a 5-second automatic timeout).
 - **Title-Only Scope**: Removed terminal and system completion notifications so the extension only manages terminal titles.
 - **Cleanup and Optimization**: Removed all dead code (such as confirm/select dialog wrappers, user prompt traversals, and deprecated settings/notifications like `notifyOnAuth`).
